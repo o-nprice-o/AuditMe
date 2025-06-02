@@ -59,8 +59,3 @@ python auditme.py --module base
     Remediation suggestions
 
     GUI frontend
-
-
----
-
-Let me know if you'd like this saved to your project automatically or want a version that includes badges (like Python version, license, etc.) at the top.
