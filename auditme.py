@@ -16,8 +16,8 @@ def main():
     )
     args = parser.parse_args()
 
-    print(f"[+] Runnit audit module: {args.module}")
-    results = run_audits(module_name=args.module, verbose=args.verbose)
+    print(f"[+] Running audit module: {args.module}")
+    results = run_audits(module=args.module, verbose=args.verbose)
     print("\n== Audit Results ===")
     for check, result in results.items():
         status = "PASS" if result['passed'] else "FAIL"

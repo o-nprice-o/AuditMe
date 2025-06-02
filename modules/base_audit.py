@@ -1,7 +1,12 @@
+import json
 import platform
-import distro
+if platform.system() == "Linux":
+    import distro
 import subprocess
 import psutil
+import re
+if platform.system() == "Windows":
+    import ctypes
 
 
 def check_os_version():
@@ -40,17 +45,17 @@ def check_python_version():
     return {'passed': passed, 'details': details}
 
 def check_firewall_status():
-    if platform.system() != "Windows":
-        return {'passed': True, 'details': 'Non-Windows system, skipping firewall check'}
-
     try:
-        output = subprocess.check_output(["netsh", "advfirewall", "show", "allprofiles"], text=True)
-        if "State ON" in output:
-            return {'passed': True, 'details': f'Firewall {output} is ON for at least one profile'}
-        else:
-            return {'passed': False, 'details': f'Firewall {output} is OFF on all profiles'}
+        cmd = ["powershell", "-Command", "Get-NetFirewallProfile | Select-Object -Property Name, Enabled | ConvertTo-Json"]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        profiles = json.loads(result.stdout)
+        all_enabled = all(p["Enabled"] for p in profiles)
+        return {
+            "passed": all_enabled,
+            "details": "All firewall profiles enabled" if all_enabled else "One or more firewall profiles are disabled"
+        }
     except Exception as e:
-        return {'passed': False, 'details': 'Error checking firewall: {e}'}
+        return {"passed": False, "details": f"Error checking firewall: {e}"}
 
 def check_antivirus_status():
     if platform.system() != "Windows":
@@ -68,31 +73,42 @@ def check_antivirus_status():
         return {'passed': False, 'details': f'AV check error: {e}'}
 
 def check_open_ports():
-    risky_ports = {21, 23, 3389, 445, 139}
-    connections = psutil.net_connections()
-    open_risky = [c.laddr.port for c in connections if c.status == 'LISTEN' and c.laddr.port in risky_ports]
-
-    if open_risky:
-        return {'passed': False, 'details': f'Risky ports open: {open_risky}'}
-    return {'passed': True, 'details': 'No risky ports open'}
+    try:
+        conns = psutil.net_connections()
+        open_ports = [c.laddr.port for c in conns if c.status == 'LISTEN']
+        if open_ports:
+            return {"passed": False, "details": f"Listening ports found: {open_ports}"}
+        else:
+            return {"passed": True, "details": "No listening ports found"}
+    except Exception as e:
+        return {"passed": False, "details": f"Error checking open ports: {e}"}
 
 def check_admin_users():
     try:
-        if platform.system() == "Windows":
-            output = subprocess.check_output("net localgroup administrators", text=True)
-            users = [line.strip() for line in output.splitlines() if
-                     line.strip() and "command completed" not in line.lower()]
-            return {'passed': len(users) <= 2, 'details': f'Admin users: {len(users)} → {users}'}
-        else:
-            output = subprocess.check_output("getent group sudo", shell=True, text=True)
-            users = output.strip().split(":")[-1].split(",")
-            users = [u.strip() for u in users if u.strip()]
-            return {'passed': len(users) <= 2, 'details': f'Sudo users: {len(users)} → {users}'}
-    except Exception as e:
-        return {'passed': False, 'details': f'Error checking admin users: {e}'}
+        cmd = ['powershell', '-Command', 'net localgroup administrators']
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        lines = result.stdout.splitlines()
 
-import platform
-import subprocess
+        # Filter only the member entries
+        members = []
+        in_members = False
+        for line in lines:
+            line = line.strip()
+            if not line or "command completed" in line.lower():
+                continue
+            if line.startswith("---"):
+                in_members = True
+                continue
+            if in_members:
+                members.append(line)
+
+        passed = len(members) > 0
+        return {
+            "passed": passed,
+            "details": f"Administrator group members: {', '.join(members)}" if passed else "No members found in Administrators group"
+        }
+    except Exception as e:
+        return {"passed": False, "details": f"Error checking admin users: {e}"}
 
 def check_password_policy_windows():
     """
@@ -204,29 +220,57 @@ def check_ssh_config():
     except Exception as e:
         return {'passed': False, 'details': f'Error checking SSH config: {e}'}
 
+def is_admin():
+    """Check if the script is running with admin rights (Windows only)."""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
 def check_disk_encryption():
-    if platform.system() == "Windows":
+    system = platform.system()
+
+    if system == "Windows":
+        if not is_admin():
+            return {
+                "passed": False,
+                "details": "Insufficient privileges to check BitLocker status. Please run as Administrator."
+            }
+
         try:
-            output = subprocess.check_output(["manage-bde", "-status"], text=True)
-            if "Percentage Encrypted: 100%" in output:
-                return {'passed': True, 'details': 'Bitlocker fully enabled'}
+            result = subprocess.run(
+                ['powershell', '-Command', 'manage-bde -status C:'],
+                capture_output=True, text=True, check=True
+            )
+            output = result.stdout
+
+            protection_on = re.search(r'Protection Status:\s+Protection On', output)
+            full_encryption = re.search(r'Percentage Encrypted:\s+100(?:\.0)?%', output)
+
+            if protection_on and full_encryption:
+                return {"passed": True, "details": "BitLocker is ON and drive is 100% encrypted"}
             else:
-                return {'passed': False, 'details': 'Bitlocker not fully enabled'}
-        except:
-            return {'passed': False, 'details': 'Error checking disk encryption'}
-    elif platform.system() == "Linux":
+                return {"passed": False, "details": "BitLocker not fully enabled or partially encrypted"}
+        except subprocess.CalledProcessError as e:
+            return {"passed": False, "details": f"BitLocker check failed: {e}"}
+        except Exception as e:
+            return {"passed": False, "details": f"Unexpected error: {e}"}
+
+    elif system == "Linux":
         output = subprocess.getoutput("lsblk -o NAME,TYPE,MOUNTPOINT | grep crypt")
         if output.strip():
             return {'passed': True, 'details': 'Encrypted volume(s) detected'}
         return {'passed': False, 'details': 'Encrypted volume(s) not detected'}
-    elif platform.system() == "Darwin":
+
+    elif system == "Darwin":  # macOS
         output = subprocess.getoutput("fdesetup status")
         if "FileVault is On" in output:
             return {'passed': True, 'details': 'FileVault is enabled'}
         return {'passed': False, 'details': 'FileVault is not enabled'}
-    return {'passed': False, 'details': 'Unable to check encryption'}
 
-def run_audits():
+    return {'passed': False, 'details': 'Unable to check encryption on this OS'}
+
+def run_audits(module=None, verbose=False):
     checks = {
         "OS Version": check_os_version,
         "Firewall Status": check_firewall_status,
