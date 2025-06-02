@@ -1,0 +1,5 @@
+### 📦 `requirements.txt`
+
+colorama>=0.4.6
+psutil>=5.9.8
+distro>=1.9.0; platform_system=="Linux"
