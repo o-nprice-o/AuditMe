@@ -7,7 +7,16 @@ import psutil
 import re
 if platform.system() == "Windows":
     import ctypes
+import sys
 
+def require_admin():
+    """ Relaunch the script with admin rights if not already elevated. """
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+        sys.exit()
+
+require_admin()
 
 def check_os_version():
     system = platform.system()

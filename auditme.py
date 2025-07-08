@@ -27,3 +27,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    input("\nAudit complete. Press Enter to exit...")
